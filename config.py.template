@@ -1,3 +1,88 @@
+#When in test mode snap will effectively (although not literally!) chroot all
+#snap actions specified in the manifest.py into testmode_prefix. So if your
+#project would normall snap to /opt/foo/bar, when in test mode it would get
+#snapped to /tmp/snap_test/opt/foo/bar, and all remote-scripts would be run
+#relative to that directory as well. Please note that this is not a real chroot,
+#and it is still possible to affect things outside the test environment with
+#remote scripts.
 testmode=True
-if testmode: snap_prefix="/tmp/snap_test"
-else: snap_prefix="/"
+testmode_prefix="/tmp/snap_test"
+
+#List of default items/globs which rsync should always exclude when snapping
+default_excludes = [
+    ".git",
+    "__pycache__",
+    "*.pyc"
+]
+
+from lib.project import project #Don't remove this line
+projects = [
+
+    #project(
+    #           name        = "projectname",
+    #           url         = "git@example.com:foo/bar.git",
+    #           location    = "/projects/directory",
+    #
+    #           #Defaults to the current user
+    #           remote_user = "some_user",
+    #
+    #           #Defaults to current users's key, path can be absolute or
+    #           #relative with respect to this file
+    #           remote_user_key  = "key/location"
+    #       ),
+    #
+    #project(...)
+
+]
+
+from lib.node import node #Don't remove this line
+nodes = [
+
+    #node(
+    #           name        = "nodename",
+    #           ip          = "ip/hostname",
+    #           ssh_port    = 22, #Defaults to 22
+    #           groups      = [ "list", "of", "groups" ] #Defaults to []
+    #    ),
+    #
+    #node(...)
+
+]
+
+#If you want all snaps to tag the commit snapped in git and push that to the remote
+#repository then have this function return the string you want them tagged with.
+#By default the function returns a simple time-based string. The function takes
+#in the project object for the snap in question, so you can use that for a more
+#complex situation. Functions/attributes for the project class to know about:
+#
+# * project.get_cache_dir() - returns the absolute path to the local copy of the
+#                             project.
+# * project.get_snap_dir()  - returns the absolute path to the snap directory of the
+#                             local copy of the project.
+# * project.name            - the name of the project as defined in config.py
+#
+#(Note that this function will be run BEFORE the snap is actually started)
+#If you don't want the project to be snapped by default, have this return None
+def default_tag(project):
+    import time
+    return time.strftime("snap_%Y-%m-%d_%H-%M-%S")
+
+#Whether or not to always send a wentlive
+wentlive_always = False
+
+#Where the wentlive should appear to come from
+wentlive_source = 'foo@gmail.com'
+
+#Where the wentlive should go (can also be a list of addresses)
+wentlive_destination = 'bar@gmail.com'
+
+#The smtpserver to use (in the form of "host:port" if port needs to be specified)
+#smtpserver = 'smtp.gmail.com'
+smtpserver = 'localhost'
+
+#Login for the smtp server if needed (in the form of "username:password") or None if not needed
+#smtplogin = "username:password"
+smtplogin = None
+
+#Whether or not to use SSL for smtp
+smtpssl = False

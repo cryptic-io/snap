@@ -1,9 +1,10 @@
 import lib.util
 import lib.menu
 import lib.term
-import lib.manifest
 import os
 import subprocess
+import getpass
+import fnmatch
 
 git_env = os.environ.copy()
 git_env["GIT_SSH"] = os.path.join(os.getcwd(),"ssh_wrapper.sh")
@@ -15,10 +16,13 @@ def cache_path():
 
 class project:
 
-    def __init__(self,json):
-        self.name    = json["name"]
-        self.url     = json["url"]
-        self.fetched = False
+    def __init__(self,name,url,location,remote_user=getpass.getuser(),remote_user_key=None):
+        self.name     = name
+        self.url      = url
+        self.location = location
+        self.user     = remote_user
+        self.key      = remote_user_key
+        self.fetched  = False
 
     def clone(self):
         '''Clones project into cache, unless it's already there'''
@@ -33,7 +37,7 @@ class project:
         if not self.fetched:
             lib.term.print_c("Fetching....\n",lib.term.BLUE)
             self.fetched = True
-            subprocess.call(["git","fetch","-v","--all"],
+            subprocess.call(["git","fetch","-pv","--all"],
                             cwd=self.get_cache_dir(),
                             env=git_env)
 
@@ -47,10 +51,36 @@ class project:
         branches = []
         for branch in out.split("\n"):
             if not "HEAD" in branch:
-                try: 
+                try:
                     branches.append(branch.split("/")[1])
                 except Exception: pass
         return branches
+
+    def tags(self):
+        '''List all current tags for the project'''
+        subprocess.call(["git","fetch","-pvt","--all"],
+                        cwd=self.get_cache_dir(),
+                        env=git_env)
+        out = str(subprocess.check_output(["git","tag","-l"],cwd=self.get_cache_dir()),'utf8')
+        return out.split("\n")
+
+    def current_branch(self):
+        '''Returns the name of the current branch'''
+        cwd = self.get_cache_dir()
+        branch = str(subprocess.check_output(["git","rev-parse","--abbrev-ref","HEAD"],cwd=cwd),'utf8')
+        return branch.rstrip()
+
+    def current_commit(self):
+        '''Returns the name of the current commit'''
+        cwd = self.get_cache_dir()
+        branch = str(subprocess.check_output(["git","rev-parse","HEAD"],cwd=cwd),'utf8')
+        return branch.rstrip()
+
+    def current_commit_message(self):
+        '''Returns the current commit message'''
+        cwd = self.get_cache_dir()
+        branch = str(subprocess.check_output(["git","log","-1","--pretty=%B"],cwd=cwd),'utf8')
+        return branch.rstrip()
 
     def checkout(self,branch):
         '''Checks out the given branch in the local cache repo, does a hard reset'''
@@ -58,10 +88,15 @@ class project:
         cwd = self.get_cache_dir()
         lib.term.print_c("Checking out....\n",lib.term.BLUE)
         with open(os.devnull) as null:
-            subprocess.call(["git","branch","-f",branch],stdout=null,stderr=null,cwd=cwd)
             subprocess.call(["git","checkout",branch],stdout=null,stderr=null,cwd=cwd)
-            subprocess.call(["git","reset","--hard","origin/"+branch],cwd=cwd)
-            subprocess.call(["git","clean","-f","-d"],cwd=cwd)
+            subprocess.call(["git","reset","--hard",branch],cwd=cwd)
+            subprocess.call(["git","clean","-f","-d","-x"],cwd=cwd)
+
+    def tag(self,tagname):
+        '''Tags whatever commit the project is on and attempts to push that to the remote repo'''
+        cwd = self.get_cache_dir()
+        subprocess.call(["git","tag",tagname],cwd=cwd)
+        subprocess.call(["git","push","--tags"],cwd=cwd)
 
     def get_cache_dir(self):
         '''Return relative path to project's repo cache'''
@@ -70,40 +105,32 @@ class project:
     def get_snap_dir(self):
         '''Returns full path to project's snap directory'''
         return os.path.join(self.get_cache_dir(),"snap")
-        
+
     def choose_and_checkout_branch(self):
         '''Gives user list of branches to choose from, and checks out the chosen one'''
         branches = {}
         for b in self.branches():
             branches[b] = b
+        branches["# Choose a tag instead #"] = True
         branch = lib.menu.navigate("Choose a branch from {0}".format(self.name),branches)
+
+        if branch is True:
+            tags = {}
+            for t in self.tags():
+                if t: tags[t] = t
+
+            if not tags:
+                lib.term.big_error("There are no tags associated with this repo\n")
+                lib.term.big_error("Press enter to go back\n")
+                lib.term.readline()
+                return self.choose_and_checkout_branch()
+
+            branch = lib.menu.navigate("Choose a tag from {0}".format(self.name),tags)
+        else:
+            branch = "origin/"+branch
+
         self.checkout(branch)
         return branch
-
-    def get_snapfile_lines(self,fn):
-        '''Returns lines from a file in the project's snap directory as a list,
-        or empty list on error'''
-        lines = []
-        try:
-            with open(os.path.join(self.get_snap_dir(),fn)) as f:
-                for l in f:
-                    lines.append(l.rstrip())
-            return lines
-        except Exception:
-            return []
-
-    def get_excludes(self):
-        '''Returns project's excludes'''
-        return self.get_snapfile_lines("excludes")
-
-    def get_includes(self):
-        '''Returns project's includes'''
-        return self.get_snapfile_lines("includes")
-
-    def get_manifest(self):
-        lines = self.get_snapfile_lines("manifest")
-        if lines == []: lines = ["stage ."]
-        return lib.manifest.parse_manifest(lines)
 
     def snap_script(self,script):
         '''Runs a script in the snap directory'''
@@ -114,3 +141,16 @@ class project:
         if os.path.isfile(fn_abs):
             os.system("chmod +x {0}".format(fn_abs))
             lib.util.command_check_stderr([fn_rel], cwd=cache_path)
+
+    def get_nosnap(self):
+        '''Returns a nosnap message that exists in the root of the project, or None'''
+        cache_path = self.get_cache_dir()
+        root_contents = os.listdir(cache_path)
+        for f in fnmatch.filter(root_contents,'*.nosnap'):
+            fullf = os.path.join(cache_path,f)
+            if os.path.isfile(fullf):
+                s = ""
+                with open(fullf,'r') as fh:
+                    for l in fh: s += l
+                return s
+        return None
